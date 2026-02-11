@@ -1,12 +1,19 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import (
-    auth, otp, dashboard,
-    worksheet, diagram, fluency,
-    story, teachback, lesson_plan,
-    video_generation, answer_sheet_evaluator
-)
+from app.routers.auth import router as auth_router
+from app.routers.otp import router as otp_router
+from app.routers.dashboard import router as dashboard_router
+
+from app.routers.worksheet import router as worksheet_router
+from app.routers.diagram import router as diagram_router
+from app.routers.fluency import router as fluency_router
+from app.routers.story import router as story_router
+from app.routers.teachback import router as teachback_router
+from app.routers.lesson_plan import router as lesson_plan_router
+from app.routers.video_generation import router as video_router
+from app.routers.answer_sheet_evaluator import router as answer_sheet_router
+
 
 app = FastAPI(title="Abhyaas Backend Full")
 
@@ -27,6 +34,7 @@ def home():
 @app.get("/health")
 def health():
     return {"status": "healthy"}
+
 
 # ✅ Routers
 app.include_router(auth.router, prefix="/auth")
