@@ -12,6 +12,7 @@ openai
 pydantic
 pillow
 email-validator
+requests
 
 elevenlabs==0.2.26
 email_validator==2.2.0
