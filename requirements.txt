@@ -13,6 +13,7 @@ pydantic
 pillow
 email-validator
 requests
+sendgrid
 
 elevenlabs==0.2.26
 email_validator==2.2.0
