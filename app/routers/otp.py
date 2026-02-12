@@ -3,7 +3,6 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from twilio.twiml.voice_response import VoiceResponse
 from datetime import datetime, timedelta
-import os
 
 from app.core.deps import get_db
 from app.core.config import PUBLIC_BASE_URL, TWILIO_PHONE_NUMBER
@@ -18,7 +17,6 @@ from app.models.auth_schemas import (
 from app.services.otp_service import generate_otp
 from app.services.email_service import send_email_otp
 from app.services.twilio_service import get_twilio_client
-
 
 
 router = APIRouter(tags=["OTP"])
@@ -96,7 +94,7 @@ def send_phone(body: SendPhoneOTP, db: Session = Depends(get_db)):
     if not PUBLIC_BASE_URL:
         raise HTTPException(
             status_code=500,
-            detail="PUBLIC_BASE_URL missing in .env (ngrok url required for Twilio)"
+            detail="PUBLIC_BASE_URL missing (required for Twilio webhook)"
         )
 
     try:
