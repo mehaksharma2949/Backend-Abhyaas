@@ -15,17 +15,20 @@ from app.core.config import ADMIN_TEACHER_CODE
 from app.core.utils_phone import normalize_phone, is_valid_phone
 
 
-
-# ❌ prefix yaha mat do (main.py me prefix dena best hai)
 router = APIRouter(tags=["Auth"])
 
 
+# ----------------- SIGNUP EMAIL -----------------
 @router.post("/signup/email")
 def signup_email(body: SignupEmail, db: Session = Depends(get_db)):
 
     role = body.role.lower().strip()
     if role not in ["student", "teacher"]:
         raise HTTPException(status_code=400, detail="Invalid role")
+
+    # ✅ bcrypt safety
+    if len(body.password) > 72:
+        raise HTTPException(status_code=400, detail="Password too long (max 72 characters)")
 
     if role == "teacher":
         if body.admin_code != ADMIN_TEACHER_CODE:
@@ -50,12 +53,17 @@ def signup_email(body: SignupEmail, db: Session = Depends(get_db)):
     return {"message": "User created. Now verify email OTP using /otp/email/send"}
 
 
+# ----------------- SIGNUP PHONE -----------------
 @router.post("/signup/phone")
 def signup_phone(body: SignupPhone, db: Session = Depends(get_db)):
 
     role = body.role.lower().strip()
     if role not in ["student", "teacher"]:
         raise HTTPException(status_code=400, detail="Invalid role")
+
+    # ✅ bcrypt safety
+    if len(body.password) > 72:
+        raise HTTPException(status_code=400, detail="Password too long (max 72 characters)")
 
     if role == "teacher":
         if body.admin_code != ADMIN_TEACHER_CODE:
@@ -82,6 +90,7 @@ def signup_phone(body: SignupPhone, db: Session = Depends(get_db)):
     return {"message": "User created. Now verify phone OTP using /otp/phone/send"}
 
 
+# ----------------- LOGIN -----------------
 @router.post("/login")
 def login(body: LoginBody, db: Session = Depends(get_db)):
 
@@ -101,6 +110,10 @@ def login(body: LoginBody, db: Session = Depends(get_db)):
         if not user.is_phone_verified:
             raise HTTPException(status_code=403, detail="Phone not verified")
 
+    # ✅ bcrypt safety
+    if len(body.password) > 72:
+        raise HTTPException(status_code=400, detail="Password too long (max 72 characters)")
+
     if not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
@@ -118,6 +131,7 @@ def login(body: LoginBody, db: Session = Depends(get_db)):
     }
 
 
+# ----------------- REFRESH -----------------
 @router.post("/refresh")
 def refresh(body: RefreshBody, db: Session = Depends(get_db)):
 
@@ -138,6 +152,7 @@ def refresh(body: RefreshBody, db: Session = Depends(get_db)):
     return {"access_token": new_access, "token_type": "bearer"}
 
 
+# ----------------- LOGOUT -----------------
 @router.post("/logout")
 def logout(body: RefreshBody, db: Session = Depends(get_db)):
 
@@ -151,10 +166,15 @@ def logout(body: RefreshBody, db: Session = Depends(get_db)):
     return {"message": "Logged out successfully"}
 
 
+# ----------------- RESET PASSWORD -----------------
 @router.post("/reset-password")
 def reset_password(body: ResetPasswordBody, db: Session = Depends(get_db)):
 
     identifier = body.identifier.strip()
+
+    # ✅ bcrypt safety
+    if len(body.new_password) > 72:
+        raise HTTPException(status_code=400, detail="Password too long (max 72 characters)")
 
     # find user
     if "@" in identifier:
