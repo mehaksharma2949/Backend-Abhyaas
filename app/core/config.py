@@ -20,7 +20,7 @@ TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com").strip()
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587").strip())
+SMTP_PORT = int(os.getenv("SMTP_PORT", "465").strip())
 
 SMTP_EMAIL = os.getenv("SMTP_EMAIL", "").strip()
 SMTP_APP_PASSWORD = os.getenv("SMTP_APP_PASSWORD", "").strip()
