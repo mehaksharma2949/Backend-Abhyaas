@@ -11,15 +11,13 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def hash_password(password: str) -> str:
-    if len(password) > 72:
-        raise HTTPException(status_code=400, detail="Password too long (max 72 characters)")
+    password = password.encode("utf-8")[:72].decode("utf-8", errors="ignore")
     return pwd_context.hash(password)
 
-
 def verify_password(password: str, hashed: str) -> bool:
-    if len(password) > 72:
-        raise HTTPException(status_code=400, detail="Password too long (max 72 characters)")
+    password = password.encode("utf-8")[:72].decode("utf-8", errors="ignore")
     return pwd_context.verify(password, hashed)
+
 
 
 def create_access_token(user_id: str, role: str):
