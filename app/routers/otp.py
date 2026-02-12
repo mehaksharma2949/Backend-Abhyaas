@@ -3,6 +3,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from twilio.twiml.voice_response import VoiceResponse
 from datetime import datetime, timedelta
+import os
 
 from app.core.deps import get_db
 from app.core.config import PUBLIC_BASE_URL, TWILIO_PHONE_NUMBER
@@ -19,12 +20,11 @@ from app.services.email_service import send_email_otp
 from app.services.twilio_service import get_twilio_client
 
 
+
 router = APIRouter(tags=["OTP"])
 
 
-# ==============================
-# EMAIL OTP
-# ==============================
+# ---------------- EMAIL OTP ----------------
 @router.post("/email/send")
 def send_email(body: SendEmailOTP, db: Session = Depends(get_db)):
 
@@ -39,11 +39,7 @@ def send_email(body: SendEmailOTP, db: Session = Depends(get_db)):
     db.add(OTPCode(user_id=user.id, channel="email", otp_code=otp))
     db.commit()
 
-    # ✅ Send OTP using SendGrid
-    try:
-        send_email_otp(email, otp)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    send_email_otp(email, otp)
 
     return {"message": "Email OTP sent"}
 
@@ -80,9 +76,7 @@ def verify_email(body: VerifyEmailOTP, db: Session = Depends(get_db)):
     return {"message": "Email verified successfully"}
 
 
-# ==============================
-# PHONE OTP (TWILIO VOICE CALL)
-# ==============================
+# ---------------- PHONE OTP (TWILIO VOICE CALL) ----------------
 @router.post("/phone/send")
 def send_phone(body: SendPhoneOTP, db: Session = Depends(get_db)):
 
@@ -102,7 +96,7 @@ def send_phone(body: SendPhoneOTP, db: Session = Depends(get_db)):
     if not PUBLIC_BASE_URL:
         raise HTTPException(
             status_code=500,
-            detail="PUBLIC_BASE_URL missing in env"
+            detail="PUBLIC_BASE_URL missing in .env (ngrok url required for Twilio)"
         )
 
     try:
@@ -154,9 +148,7 @@ def verify_phone(body: VerifyPhoneOTP, db: Session = Depends(get_db)):
     return {"message": "Phone verified successfully"}
 
 
-# ==============================
-# TWILIO WEBHOOK
-# ==============================
+# ---------------- TWILIO WEBHOOK ----------------
 @router.api_route("/twilio-voice", methods=["GET", "POST"])
 async def twilio_voice(request: Request):
 
