@@ -4,22 +4,17 @@ import re
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
-from fastapi import APIRouter
+from dotenv import load_dotenv
+
+from openai import OpenAI
+from supabase import create_client, Client
 
 router = APIRouter(tags=["Story"])
 
-from dotenv import load_dotenv
 load_dotenv()
-
-from openai import OpenAI
-
-# ✅ Supabase
-from supabase import create_client, Client
-
 
 # =========================
 # CONFIG
@@ -40,17 +35,6 @@ if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
     print("✅ Supabase connected")
 else:
     print("⚠️ Supabase not configured (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing)")
-
-app = FastAPI(title="Abhyaas • NCERT Voice Storytelling API")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 
 # =========================
 # FULL NCERT (Class 3–8)
@@ -185,16 +169,14 @@ NCERT: Dict[str, Dict[str, List[str]]] = {
     },
 }
 
-
 # =========================
-# FLATTEN INDEX
+# HELPERS
 # =========================
 def normalize(s: str) -> str:
     s = s.lower().strip()
     s = s.replace("’", "'").replace("–", "-")
     s = re.sub(r"\s+", " ", s)
     return s
-
 
 def build_flat_index() -> List[dict]:
     items = []
@@ -209,13 +191,10 @@ def build_flat_index() -> List[dict]:
                 })
     return items
 
-
 FLAT = build_flat_index()
-
 
 def best_match(class_level: str, query: str) -> Optional[dict]:
     q = normalize(query)
-
     pool = [x for x in FLAT if x["class_level"] == class_level]
 
     for item in pool:
@@ -241,21 +220,6 @@ def best_match(class_level: str, query: str) -> Optional[dict]:
 
     return None
 
-
-# =========================
-# REQUEST MODELS
-# =========================
-class StoryByChapterNameRequest(BaseModel):
-    class_level: str
-    chapter_name: str
-    language: str = "Hindi"
-    style: str = "Warm Teacher"
-    length: str = "Full"
-
-
-# =========================
-# PROMPTS
-# =========================
 def safe_json_parse(text: str) -> dict:
     text = text.strip()
     if text.startswith("{") and text.endswith("}"):
@@ -266,7 +230,19 @@ def safe_json_parse(text: str) -> dict:
         raise ValueError("Could not find JSON in model response")
     return json.loads(m.group(0))
 
+# =========================
+# REQUEST MODEL
+# =========================
+class StoryByChapterNameRequest(BaseModel):
+    class_level: str
+    chapter_name: str
+    language: str = "Hindi"
+    style: str = "Warm Teacher"
+    length: str = "Full"
 
+# =========================
+# PROMPT
+# =========================
 def build_story_prompt(class_level: str, subject: str, chapter: str, language: str, style: str, length: str) -> str:
     return f"""
 You are a very kind Indian government school teacher.
@@ -287,7 +263,6 @@ STRICT RULES:
 - Use a continuous story with characters (2 kids + 1 teacher OR 1 grandparent).
 - Cover ALL key points of the chapter in story form (not summary).
 - Use simple words, short sentences, and Indian daily-life examples.
-- Do not skip important subtopics.
 
 - Always add "timeline_or_steps":
   - If History: include YEAR + EVENT
@@ -297,8 +272,6 @@ STRICT RULES:
   - If English: include STORY SEQUENCE + 5 vocab words
 
 - Always add "memory_tricks" in simple Hindi/English.
-- Years should be easy to remember using small patterns or hooks.
-- Make it student-friendly for government schools.
 
 - Use language: {language}
 - Style: {style}
@@ -314,12 +287,7 @@ OUTPUT MUST BE JSON ONLY (no markdown, no extra text):
     {{"key":"...", "point":"..."}}
   ],
   "memory_tricks": [
-    "...",
-    "...",
-    "...",
-    "...",
-    "...",
-    "..."
+    "...","...","...","...","...","..."
   ],
   "questions": [
     {{"q": "...", "type": "mcq", "options": ["A","B","C","D"], "answer": "A"}},
@@ -332,71 +300,18 @@ OUTPUT MUST BE JSON ONLY (no markdown, no extra text):
 }}
 """.strip()
 
-
-def build_teacher_script(story_json: dict) -> str:
-    title = story_json.get("title", "")
-    story = story_json.get("story", "")
-
-    recap = story_json.get("concept_recap", [])
-    recap = recap if isinstance(recap, list) else []
-
-    timeline = story_json.get("timeline_or_steps", [])
-    timeline = timeline if isinstance(timeline, list) else []
-
-    tricks = story_json.get("memory_tricks", [])
-    tricks = tricks if isinstance(tricks, list) else []
-
-    recap_text = ""
-    if recap:
-        recap_text = "\n\nChalo ab recap karte hain.\n" + "\n".join(
-            [f"{i+1}. {x}" for i, x in enumerate(recap)]
-        )
-
-    timeline_text = ""
-    if timeline:
-        timeline_text = "\n\nChalo ab timeline ya steps dekhte hain.\n" + "\n".join(
-            [f"{i+1}. {x.get('key','')} — {x.get('point','')}" for i, x in enumerate(timeline)]
-        )
-
-    tricks_text = ""
-    if tricks:
-        tricks_text = "\n\nAb kuch yaad rakhne ke tricks.\n" + "\n".join(
-            [f"{i+1}. {t}" for i, t in enumerate(tricks)]
-        )
-
-    return f"""
-Namaste bachcho!
-Aaj hum ek full chapter kahani sunenge.
-
-Kahani ka naam hai:
-{title}
-
-Ab dhyan se sunna.
-
-{story}
-{recap_text}
-{timeline_text}
-{tricks_text}
-
-Bahut badhiya!
-Ab aap teacher ko 2 line me batao, aaj aapne kya seekha.
-""".strip()
-
-
 # =========================
-# ROUTES
+# ROUTES (router based ✅)
 # =========================
-@app.get("/")
+@router.get("/")
 def root():
-    return {"ok": True, "service": "Abhyaas Voice Storytelling"}
+    return {"ok": True, "service": "Story router working"}
 
-
-@app.get("/api/classes")
+@router.get("/api/classes")
 def get_classes():
     return ["3", "4", "5", "6", "7", "8"]
 
-
-@app.post("/api/story_by_name")
+@router.post("/api/story_by_name")
 def story_by_name(req: StoryByChapterNameRequest):
     if req.class_level not in NCERT:
         raise HTTPException(status_code=400, detail="Invalid class")
@@ -435,9 +350,7 @@ def story_by_name(req: StoryByChapterNameRequest):
         raw = resp.choices[0].message.content
         data = safe_json_parse(raw)
 
-        # =========================
         # SAVE TO SUPABASE
-        # =========================
         saved_id = None
         if supabase is not None:
             try:
@@ -454,7 +367,6 @@ def story_by_name(req: StoryByChapterNameRequest):
                 }
 
                 db_res = supabase.table("stories").insert(insert_payload).execute()
-
                 if db_res.data and len(db_res.data) > 0:
                     saved_id = db_res.data[0].get("id")
 
@@ -481,8 +393,7 @@ def story_by_name(req: StoryByChapterNameRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Story generation failed: {str(e)}")
 
-
-@app.post("/api/tts")
+@router.post("/api/tts")
 def tts(payload: dict):
     text = payload.get("text", "")
     voice = payload.get("voice", "nova")
@@ -509,11 +420,7 @@ def tts(payload: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"TTS failed: {str(e)}")
 
-
-# =========================
-# OPTIONAL: HISTORY ENDPOINT
-# =========================
-@app.get("/api/history")
+@router.get("/api/history")
 def history():
     if supabase is None:
         raise HTTPException(status_code=400, detail="Supabase not configured")
