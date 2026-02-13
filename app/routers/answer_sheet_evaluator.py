@@ -16,7 +16,7 @@ basedir = os.path.dirname(__file__)
 dotenv_path = os.path.join(basedir, ".env")
 load_dotenv(dotenv_path, override=True)
 
-OPENAI_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
