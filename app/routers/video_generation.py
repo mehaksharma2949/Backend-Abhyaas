@@ -25,8 +25,8 @@ load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # --- ELEVENLABS ---
-# IMPORTANT: tum Render me env variable ka naam EXACT ye rakho
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")  # ✅ MUST
 
 # --- SUPABASE ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -37,6 +37,9 @@ if not GROQ_API_KEY:
 
 if not ELEVENLABS_API_KEY:
     raise RuntimeError("ELEVENLABS_API_KEY missing in env")
+
+if not ELEVENLABS_VOICE_ID:
+    raise RuntimeError("ELEVENLABS_VOICE_ID missing in env")
 
 if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
     raise RuntimeError("SUPABASE_URL or SUPABASE_KEY missing in env")
@@ -143,24 +146,19 @@ Rules:
 
 
 # =========================
-# 2) ELEVENLABS TTS
+# 2) ELEVENLABS TTS (VOICE_ID ONLY)
 # =========================
 def generate_tts_audio(text: str, out_path: Path):
     """
     Uses ElevenLabs old SDK (0.2.27)
     IMPORTANT:
-    - Voice name must exist in your account.
-    - "Bella" often not available in free accounts.
+    - Use VOICE_ID only
+    - Voice name like "Bella" / "Rachel" will fail
     """
-
-    # SAFE voice name (usually exists):
-    # Try "Rachel" first (most common)
-    # If not working, we will change.
-    voice_name = os.getenv("ELEVENLABS_VOICE_NAME", "Rachel")
 
     audio = generate(
         text=text,
-        voice=voice_name,
+        voice=ELEVENLABS_VOICE_ID,  # ✅ VOICE ID
         model="eleven_monolingual_v1"
     )
 
@@ -273,7 +271,7 @@ def create_frames_for_video(video_id: str, lesson: dict, final_audio_path: Path)
     frames_folder = FRAMES_DIR / video_id
     frames_folder.mkdir(parents=True, exist_ok=True)
 
-    fps = 10  # faster
+    fps = 10  # ✅ faster
     frame_num = 1
 
     total_dur = get_audio_duration_seconds(final_audio_path)
@@ -393,7 +391,6 @@ def render_video(req: VideoRequest):
         }
 
     except Exception as e:
-        # ✅ This will show real error in Render logs
         traceback.print_exc()
 
         supabase.table("videos").update({
