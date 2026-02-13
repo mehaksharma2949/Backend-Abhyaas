@@ -17,7 +17,7 @@ sendgrid
 bcrypt==3.2.2
 passlib[bcrypt]
 python-jose[cryptography]
-elevenlabs==0.2.26
+elevenlabs==0.2.27
 email_validator==2.2.0
 fastapi==0.121.3
 fastapi-cli==0.0.14
