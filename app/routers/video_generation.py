@@ -4,6 +4,7 @@ import subprocess
 import traceback
 from pathlib import Path
 
+import requests
 from dotenv import load_dotenv
 from fastapi import HTTPException, APIRouter
 from pydantic import BaseModel
@@ -11,7 +12,6 @@ from PIL import Image, ImageDraw, ImageFont
 from supabase import create_client, Client
 
 from groq import Groq
-from elevenlabs import generate, save, set_api_key
 
 
 router = APIRouter(tags=["Video"])
@@ -25,7 +25,8 @@ load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # --- ELEVENLABS ---
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+# ✅ tumne bola ELEVENLABS_KEY likhna
+ELEVENLABS_KEY = os.getenv("ELEVENLABS_KEY")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")  # ✅ MUST
 
 # --- SUPABASE ---
@@ -35,8 +36,8 @@ SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_KEY")
 if not GROQ_API_KEY:
     raise RuntimeError("GROQ_API_KEY missing in env")
 
-if not ELEVENLABS_API_KEY:
-    raise RuntimeError("ELEVENLABS_API_KEY missing in env")
+if not ELEVENLABS_KEY:
+    raise RuntimeError("ELEVENLABS_KEY missing in env")
 
 if not ELEVENLABS_VOICE_ID:
     raise RuntimeError("ELEVENLABS_VOICE_ID missing in env")
@@ -46,9 +47,6 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
 
 # init clients
 groq_client = Groq(api_key=GROQ_API_KEY)
-
-set_api_key(ELEVENLABS_API_KEY)
-
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 # =========================
@@ -128,14 +126,13 @@ Rules:
 
     text = text.strip()
 
-    # Sometimes Groq returns JSON inside ```...``` so clean it
+    # clean ```json blocks if any
     if text.startswith("```"):
         text = text.replace("```json", "").replace("```", "").strip()
 
     try:
         data = json.loads(text)
 
-        # basic validation
         if "scenes" not in data or len(data["scenes"]) != 14:
             raise Exception("Lesson JSON does not contain exactly 14 scenes")
 
@@ -146,23 +143,39 @@ Rules:
 
 
 # =========================
-# 2) ELEVENLABS TTS (VOICE_ID ONLY)
+# 2) ELEVENLABS TTS (REST API - FREE TIER SAFE)
 # =========================
 def generate_tts_audio(text: str, out_path: Path):
     """
-    Uses ElevenLabs old SDK (0.2.27)
-    IMPORTANT:
-    - Use VOICE_ID only
-    - Voice name like "Bella" / "Rachel" will fail
+    Uses ElevenLabs REST API directly
+    - Works on free tier
+    - Uses model_id=eleven_turbo_v2
+    - Uses voice_id only
     """
 
-    audio = generate(
-        text=text,
-        voice=ELEVENLABS_VOICE_ID,  # ✅ VOICE ID
-        model="eleven_monolingual_v1"
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}?model_id=eleven_turbo_v2"
+
+    response = requests.post(
+        url,
+        headers={
+            "xi-api-key": ELEVENLABS_KEY,
+            "Content-Type": "application/json",
+            "Accept": "audio/mpeg",
+        },
+        json={
+            "text": text,
+            "voice_settings": {
+                "stability": 0.65,
+                "similarity_boost": 0.75
+            }
+        },
+        timeout=120
     )
 
-    save(audio, str(out_path))
+    if response.status_code != 200:
+        raise Exception(f"ElevenLabs TTS failed: {response.status_code} - {response.text}")
+
+    out_path.write_bytes(response.content)
 
 
 # =========================
@@ -229,7 +242,6 @@ def render_scene_frame(scene, frame_path: Path, t: float, scene_duration: float)
     q = ex.get("question", "")
     steps = ex.get("steps", [])
 
-    # step reveal
     reveal_speed = 1.2
     lines_to_show = int(t / reveal_speed)
     lines_to_show = max(0, min(lines_to_show, len(steps)))
@@ -245,7 +257,7 @@ def render_scene_frame(scene, frame_path: Path, t: float, scene_duration: float)
         draw.text((board_x + 40, y), f"{i+1}. {st}", font=font_tiny, fill=(200, 230, 255, 230))
         y += 40
 
-    # speech bubble
+    # bubble
     bubble = scene.get("narration", "")
     bx, by = 50, 70
     bw, bh = 330, 160
@@ -271,7 +283,7 @@ def create_frames_for_video(video_id: str, lesson: dict, final_audio_path: Path)
     frames_folder = FRAMES_DIR / video_id
     frames_folder.mkdir(parents=True, exist_ok=True)
 
-    fps = 10  # ✅ faster
+    fps = 10
     frame_num = 1
 
     total_dur = get_audio_duration_seconds(final_audio_path)
@@ -348,7 +360,7 @@ def render_video(req: VideoRequest):
     video_id = str(row.data[0]["id"])
 
     try:
-        # 1) lesson json from Groq
+        # 1) lesson json
         lesson = generate_lesson(req.topic, req.grade, req.language)
 
         supabase.table("videos").update({
@@ -356,7 +368,7 @@ def render_video(req: VideoRequest):
             "lesson_json": lesson
         }).eq("id", video_id).execute()
 
-        # 2) SINGLE narration -> SINGLE TTS call
+        # 2) one TTS call
         final_audio = AUDIO_DIR / f"{video_id}.mp3"
 
         full_narration = "\n\n".join([
