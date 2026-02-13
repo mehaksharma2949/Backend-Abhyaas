@@ -111,7 +111,7 @@ Rules:
 """
 
     resp = groq_client.chat.completions.create(
-        model="llama-3.1-70b-versatile",
+        model="model="llama-3.3-70b-versatile",
         messages=[
             {"role": "system", "content": "Return strict JSON only. No markdown."},
             {"role": "user", "content": prompt},
