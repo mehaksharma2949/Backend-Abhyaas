@@ -1,6 +1,7 @@
 import os
 import json
 import subprocess
+import traceback
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -24,20 +25,21 @@ load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # --- ELEVENLABS ---
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_KEY")
+# IMPORTANT: tum Render me env variable ka naam EXACT ye rakho
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 
 # --- SUPABASE ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_KEY")
 
 if not GROQ_API_KEY:
-    raise RuntimeError("GROQ_API_KEY missing in .env")
+    raise RuntimeError("GROQ_API_KEY missing in env")
 
 if not ELEVENLABS_API_KEY:
-    raise RuntimeError("ELEVENLABS_KEY missing in .env")
+    raise RuntimeError("ELEVENLABS_API_KEY missing in env")
 
 if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-    raise RuntimeError("SUPABASE_URL or SUPABASE_KEY missing in .env")
+    raise RuntimeError("SUPABASE_URL or SUPABASE_KEY missing in env")
 
 # init clients
 groq_client = Groq(api_key=GROQ_API_KEY)
@@ -50,15 +52,13 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 # PATHS
 # =========================
 APP_DIR = Path(__file__).resolve().parents[1]  # backend/app
-ASSETS_DIR = APP_DIR / "assets"
 OUT_DIR = APP_DIR / "outputs"
 
-LESSONS_DIR = OUT_DIR / "lessons"
 AUDIO_DIR = OUT_DIR / "audio"
 FRAMES_DIR = OUT_DIR / "frames"
 VIDEOS_DIR = OUT_DIR / "videos"
 
-for d in [LESSONS_DIR, AUDIO_DIR, FRAMES_DIR, VIDEOS_DIR]:
+for d in [AUDIO_DIR, FRAMES_DIR, VIDEOS_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 # =========================
@@ -77,7 +77,7 @@ def generate_lesson(topic: str, grade: int, language: str):
     prompt = f"""
 You are an expert math teacher for Indian kids.
 
-Make a long VIDEO LESSON.
+Make a VIDEO LESSON.
 
 Topic: {topic}
 Grade: {grade}
@@ -102,17 +102,16 @@ Return STRICT JSON only:
 
 Rules:
 - Exactly 14 scenes.
-- Each narration should be 2-3 lines.
+- Each narration should be 2-3 lines only.
 - Every scene must teach ONE thing only.
 - Include at least 3 solved questions total.
-- Use NCERT style language.
-- Must feel like teacher is teaching.
+- NCERT style language.
+- Teacher tone.
 - No markdown.
 """
 
     resp = groq_client.chat.completions.create(
         model="llama-3.1-8b-instant",
-
         messages=[
             {"role": "system", "content": "Return strict JSON only. No markdown."},
             {"role": "user", "content": prompt},
@@ -126,24 +125,45 @@ Rules:
 
     text = text.strip()
 
+    # Sometimes Groq returns JSON inside ```...``` so clean it
+    if text.startswith("```"):
+        text = text.replace("```json", "").replace("```", "").strip()
+
     try:
-        return json.loads(text)
+        data = json.loads(text)
+
+        # basic validation
+        if "scenes" not in data or len(data["scenes"]) != 14:
+            raise Exception("Lesson JSON does not contain exactly 14 scenes")
+
+        return data
+
     except Exception:
-        raise HTTPException(status_code=500, detail=f"Invalid JSON from Groq:\n{text[:500]}")
+        raise HTTPException(status_code=500, detail=f"Invalid JSON from Groq:\n{text[:800]}")
 
 
 # =========================
-# 2) ELEVENLABS TTS (SINGLE CALL)
+# 2) ELEVENLABS TTS
 # =========================
 def generate_tts_audio(text: str, out_path: Path):
     """
-    Uses ElevenLabs old SDK (0.2.x)
+    Uses ElevenLabs old SDK (0.2.27)
+    IMPORTANT:
+    - Voice name must exist in your account.
+    - "Bella" often not available in free accounts.
     """
+
+    # SAFE voice name (usually exists):
+    # Try "Rachel" first (most common)
+    # If not working, we will change.
+    voice_name = os.getenv("ELEVENLABS_VOICE_NAME", "Rachel")
+
     audio = generate(
         text=text,
-        voice="Bella",
+        voice=voice_name,
         model="eleven_monolingual_v1"
     )
+
     save(audio, str(out_path))
 
 
@@ -158,6 +178,7 @@ def get_audio_duration_seconds(audio_path: Path) -> float:
         "-of", "default=noprint_wrappers=1:nokey=1",
         str(audio_path)
     ]
+
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode != 0:
@@ -172,7 +193,7 @@ def get_audio_duration_seconds(audio_path: Path) -> float:
 # =========================
 # 4) FRAME RENDER
 # =========================
-def render_scene_frame(scene, frame_path: Path, scene_index: int, t: float, scene_duration: float):
+def render_scene_frame(scene, frame_path: Path, t: float, scene_duration: float):
     W, H = 1280, 720
     bg = Image.new("RGBA", (W, H), (20, 20, 35, 255))
     draw = ImageDraw.Draw(bg)
@@ -195,9 +216,9 @@ def render_scene_frame(scene, frame_path: Path, scene_index: int, t: float, scen
 
     # fonts
     try:
-        font_big = ImageFont.truetype("arial.ttf", 48)
-        font_small = ImageFont.truetype("arial.ttf", 30)
-        font_tiny = ImageFont.truetype("arial.ttf", 26)
+        font_big = ImageFont.truetype("arial.ttf", 46)
+        font_small = ImageFont.truetype("arial.ttf", 28)
+        font_tiny = ImageFont.truetype("arial.ttf", 24)
     except:
         font_big = ImageFont.load_default()
         font_small = ImageFont.load_default()
@@ -211,7 +232,7 @@ def render_scene_frame(scene, frame_path: Path, scene_index: int, t: float, scen
     steps = ex.get("steps", [])
 
     # step reveal
-    reveal_speed = 1.4
+    reveal_speed = 1.2
     lines_to_show = int(t / reveal_speed)
     lines_to_show = max(0, min(lines_to_show, len(steps)))
 
@@ -229,7 +250,7 @@ def render_scene_frame(scene, frame_path: Path, scene_index: int, t: float, scen
     # speech bubble
     bubble = scene.get("narration", "")
     bx, by = 50, 70
-    bw, bh = 330, 150
+    bw, bh = 330, 160
 
     draw.rounded_rectangle(
         (bx, by, bx + bw, by + bh),
@@ -246,39 +267,39 @@ def render_scene_frame(scene, frame_path: Path, scene_index: int, t: float, scen
 
 
 # =========================
-# 5) CREATE FRAMES (SPLIT BY AUDIO LENGTH)
+# 5) CREATE FRAMES
 # =========================
 def create_frames_for_video(video_id: str, lesson: dict, final_audio_path: Path):
     frames_folder = FRAMES_DIR / video_id
     frames_folder.mkdir(parents=True, exist_ok=True)
 
-    fps = 12
+    fps = 10  # faster
     frame_num = 1
 
     total_dur = get_audio_duration_seconds(final_audio_path)
     scenes_count = len(lesson["scenes"])
-    scene_dur = max(7.0, total_dur / scenes_count)
+    scene_dur = max(6.0, total_dur / scenes_count)
 
-    for s_index, scene in enumerate(lesson["scenes"]):
+    for scene in lesson["scenes"]:
         frames_per_scene = int(scene_dur * fps)
 
         for f in range(frames_per_scene):
             t = f / fps
             frame_path = frames_folder / f"frame_{frame_num:05d}.png"
-            render_scene_frame(scene, frame_path, s_index, t, scene_dur)
+            render_scene_frame(scene, frame_path, t, scene_dur)
             frame_num += 1
 
-    return frames_folder
+    return frames_folder, fps
 
 
 # =========================
 # 6) FFMPEG MP4
 # =========================
-def render_video_ffmpeg(frames_folder: Path, audio_path: Path, out_mp4: Path):
+def render_video_ffmpeg(frames_folder: Path, fps: int, audio_path: Path, out_mp4: Path):
     cmd = [
         "ffmpeg",
         "-y",
-        "-r", "12",
+        "-r", str(fps),
         "-i", str(frames_folder / "frame_%05d.png"),
         "-i", str(audio_path),
         "-c:v", "libx264",
@@ -337,7 +358,7 @@ def render_video(req: VideoRequest):
             "lesson_json": lesson
         }).eq("id", video_id).execute()
 
-        # 2) SINGLE narration -> SINGLE tts call (fast + cheap)
+        # 2) SINGLE narration -> SINGLE TTS call
         final_audio = AUDIO_DIR / f"{video_id}.mp3"
 
         full_narration = "\n\n".join([
@@ -348,11 +369,11 @@ def render_video(req: VideoRequest):
         generate_tts_audio(full_narration, final_audio)
 
         # 3) frames
-        frames_folder = create_frames_for_video(video_id, lesson, final_audio)
+        frames_folder, fps = create_frames_for_video(video_id, lesson, final_audio)
 
         # 4) mp4
         out_mp4 = VIDEOS_DIR / f"{video_id}.mp4"
-        render_video_ffmpeg(frames_folder, final_audio, out_mp4)
+        render_video_ffmpeg(frames_folder, fps, final_audio, out_mp4)
 
         # 5) upload
         video_url = upload_file("videos", out_mp4, f"{video_id}.mp4", "video/mp4")
@@ -372,6 +393,9 @@ def render_video(req: VideoRequest):
         }
 
     except Exception as e:
+        # ✅ This will show real error in Render logs
+        traceback.print_exc()
+
         supabase.table("videos").update({
             "status": "failed",
             "error": str(e)
