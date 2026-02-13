@@ -183,9 +183,7 @@ def render_scene_frame(scene, frame_path: Path, scene_index: int, t: float, scen
     draw.ellipse((-200, -150, 500, 350), fill=(120, 80, 255, 60))
     draw.ellipse((900, 450, 1500, 1000), fill=(50, 255, 120, 50))
 
-    # teacher
-    teacher = load_asset("teacher.png").resize((350, 500))
-    bg.alpha_composite(teacher, (30, 180))
+
 
     # board
     board_x, board_y = 420, 90
