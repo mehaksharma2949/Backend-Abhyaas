@@ -24,7 +24,7 @@ load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # --- ELEVENLABS ---
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_KEY")
 
 # --- SUPABASE ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -34,7 +34,7 @@ if not GROQ_API_KEY:
     raise RuntimeError("GROQ_API_KEY missing in .env")
 
 if not ELEVENLABS_API_KEY:
-    raise RuntimeError("ELEVENLABS_API_KEY missing in .env")
+    raise RuntimeError("ELEVENLABS_KEY missing in .env")
 
 if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
     raise RuntimeError("SUPABASE_URL or SUPABASE_KEY missing in .env")
