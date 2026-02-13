@@ -2,6 +2,7 @@ import os
 import json
 import subprocess
 from pathlib import Path
+
 from dotenv import load_dotenv
 from fastapi import HTTPException, APIRouter
 from pydantic import BaseModel
@@ -9,9 +10,10 @@ from PIL import Image, ImageDraw, ImageFont
 from supabase import create_client, Client
 
 from groq import Groq
-from elevenlabs import ElevenLabs
+from elevenlabs import generate, save, set_api_key
 
-router = APIRouter(prefix="/video", tags=["Video"])
+
+router = APIRouter(tags=["Video"])
 
 # =========================
 # CONFIG
@@ -23,7 +25,6 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # --- ELEVENLABS ---
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
-ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL")  # Bella default
 
 # --- SUPABASE ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -38,15 +39,17 @@ if not ELEVENLABS_API_KEY:
 if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
     raise RuntimeError("SUPABASE_URL or SUPABASE_KEY missing in .env")
 
+# init clients
 groq_client = Groq(api_key=GROQ_API_KEY)
-eleven_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+
+set_api_key(ELEVENLABS_API_KEY)
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 # =========================
 # PATHS
 # =========================
-APP_DIR = Path(__file__).resolve().parents[1]   # backend/app
+APP_DIR = Path(__file__).resolve().parents[1]  # backend/app
 ASSETS_DIR = APP_DIR / "assets"
 OUT_DIR = APP_DIR / "outputs"
 
@@ -65,6 +68,7 @@ class VideoRequest(BaseModel):
     topic: str
     grade: int = 5
     language: str = "hinglish"
+
 
 # =========================
 # 1) LESSON GENERATOR (GROQ)
@@ -126,20 +130,21 @@ Rules:
     except Exception:
         raise HTTPException(status_code=500, detail=f"Invalid JSON from Groq:\n{text[:500]}")
 
+
 # =========================
 # 2) ELEVENLABS TTS (SINGLE CALL)
 # =========================
 def generate_tts_audio(text: str, out_path: Path):
-    audio_stream = eleven_client.text_to_speech.convert(
-        voice_id=ELEVENLABS_VOICE_ID,
-        model_id="eleven_monolingual_v1",
-        text=text
+    """
+    Uses ElevenLabs old SDK (0.2.x)
+    """
+    audio = generate(
+        text=text,
+        voice="Bella",
+        model="eleven_monolingual_v1"
     )
+    save(audio, str(out_path))
 
-    with open(out_path, "wb") as f:
-        for chunk in audio_stream:
-            if chunk:
-                f.write(chunk)
 
 # =========================
 # 3) AUDIO DURATION
@@ -153,12 +158,15 @@ def get_audio_duration_seconds(audio_path: Path) -> float:
         str(audio_path)
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
+
     if result.returncode != 0:
         return 60.0
+
     try:
         return float(result.stdout.strip())
     except:
         return 60.0
+
 
 # =========================
 # 4) FRAME RENDER
@@ -235,6 +243,7 @@ def render_scene_frame(scene, frame_path: Path, scene_index: int, t: float, scen
 
     bg.convert("RGB").save(frame_path, "PNG")
 
+
 # =========================
 # 5) CREATE FRAMES (SPLIT BY AUDIO LENGTH)
 # =========================
@@ -242,7 +251,7 @@ def create_frames_for_video(video_id: str, lesson: dict, final_audio_path: Path)
     frames_folder = FRAMES_DIR / video_id
     frames_folder.mkdir(parents=True, exist_ok=True)
 
-    fps = 12  # speed boost
+    fps = 12
     frame_num = 1
 
     total_dur = get_audio_duration_seconds(final_audio_path)
@@ -259,6 +268,7 @@ def create_frames_for_video(video_id: str, lesson: dict, final_audio_path: Path)
             frame_num += 1
 
     return frames_folder
+
 
 # =========================
 # 6) FFMPEG MP4
@@ -284,6 +294,7 @@ def render_video_ffmpeg(frames_folder: Path, audio_path: Path, out_mp4: Path):
             detail=f"FFmpeg failed:\n{result.stdout}\n{result.stderr}"
         )
 
+
 # =========================
 # 7) UPLOAD TO SUPABASE STORAGE
 # =========================
@@ -297,6 +308,7 @@ def upload_file(bucket: str, file_path: Path, dest_path: str, content_type: str)
     )
 
     return supabase.storage.from_(bucket).get_public_url(dest_path)
+
 
 # =========================
 # API: CREATE VIDEO
@@ -365,6 +377,7 @@ def render_video(req: VideoRequest):
         }).eq("id", video_id).execute()
 
         raise HTTPException(status_code=500, detail=str(e))
+
 
 # =========================
 # API: LIST VIDEOS
