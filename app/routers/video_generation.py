@@ -2,9 +2,9 @@ import os
 import json
 import subprocess
 import traceback
+import asyncio
 from pathlib import Path
 
-import requests
 from dotenv import load_dotenv
 from fastapi import HTTPException, APIRouter
 from pydantic import BaseModel
@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 from supabase import create_client, Client
 
 from groq import Groq
+import edge_tts
 
 
 router = APIRouter(tags=["Video"])
@@ -24,23 +25,12 @@ load_dotenv()
 # --- GROQ ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# --- ELEVENLABS ---
-# ✅ tumne bola ELEVENLABS_KEY likhna
-ELEVENLABS_KEY = os.getenv("ELEVENLABS_KEY")
-ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")  # ✅ MUST
-
 # --- SUPABASE ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_KEY")
 
 if not GROQ_API_KEY:
     raise RuntimeError("GROQ_API_KEY missing in env")
-
-if not ELEVENLABS_KEY:
-    raise RuntimeError("ELEVENLABS_KEY missing in env")
-
-if not ELEVENLABS_VOICE_ID:
-    raise RuntimeError("ELEVENLABS_VOICE_ID missing in env")
 
 if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
     raise RuntimeError("SUPABASE_URL or SUPABASE_KEY missing in env")
@@ -126,7 +116,7 @@ Rules:
 
     text = text.strip()
 
-    # clean ```json blocks if any
+    # Sometimes Groq returns JSON inside ```...``` so clean it
     if text.startswith("```"):
         text = text.replace("```json", "").replace("```", "").strip()
 
@@ -143,39 +133,30 @@ Rules:
 
 
 # =========================
-# 2) ELEVENLABS TTS (REST API - FREE TIER SAFE)
+# 2) EDGE TTS (FREE)
 # =========================
-def generate_tts_audio(text: str, out_path: Path):
+async def _edge_tts_async(text: str, out_path: Path, voice: str):
+    communicate = edge_tts.Communicate(text=text, voice=voice)
+    await communicate.save(str(out_path))
+
+
+def generate_tts_audio(text: str, out_path: Path, language: str):
     """
-    Uses ElevenLabs REST API directly
-    - Works on free tier
-    - Uses model_id=eleven_turbo_v2
-    - Uses voice_id only
+    Edge TTS voices:
+    - Hinglish/Indian accent: en-IN-NeerjaNeural (female), en-IN-PrabhatNeural (male)
+    - English US: en-US-JennyNeural
     """
 
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}?model_id=eleven_turbo_v2"
+    # default voice selection
+    if language.lower() in ["hinglish", "hindi", "en-in"]:
+        voice = "en-IN-NeerjaNeural"
+    else:
+        voice = "en-US-JennyNeural"
 
-    response = requests.post(
-        url,
-        headers={
-            "xi-api-key": ELEVENLABS_KEY,
-            "Content-Type": "application/json",
-            "Accept": "audio/mpeg",
-        },
-        json={
-            "text": text,
-            "voice_settings": {
-                "stability": 0.65,
-                "similarity_boost": 0.75
-            }
-        },
-        timeout=120
-    )
-
-    if response.status_code != 200:
-        raise Exception(f"ElevenLabs TTS failed: {response.status_code} - {response.text}")
-
-    out_path.write_bytes(response.content)
+    try:
+        asyncio.run(_edge_tts_async(text, out_path, voice))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Edge TTS failed: {str(e)}")
 
 
 # =========================
@@ -257,7 +238,7 @@ def render_scene_frame(scene, frame_path: Path, t: float, scene_duration: float)
         draw.text((board_x + 40, y), f"{i+1}. {st}", font=font_tiny, fill=(200, 230, 255, 230))
         y += 40
 
-    # bubble
+    # speech bubble
     bubble = scene.get("narration", "")
     bx, by = 50, 70
     bw, bh = 330, 160
@@ -360,7 +341,7 @@ def render_video(req: VideoRequest):
     video_id = str(row.data[0]["id"])
 
     try:
-        # 1) lesson json
+        # 1) lesson json from Groq
         lesson = generate_lesson(req.topic, req.grade, req.language)
 
         supabase.table("videos").update({
@@ -368,7 +349,7 @@ def render_video(req: VideoRequest):
             "lesson_json": lesson
         }).eq("id", video_id).execute()
 
-        # 2) one TTS call
+        # 2) narration -> Edge TTS
         final_audio = AUDIO_DIR / f"{video_id}.mp3"
 
         full_narration = "\n\n".join([
@@ -376,7 +357,7 @@ def render_video(req: VideoRequest):
             for i, s in enumerate(lesson["scenes"])
         ])
 
-        generate_tts_audio(full_narration, final_audio)
+        generate_tts_audio(full_narration, final_audio, req.language)
 
         # 3) frames
         frames_folder, fps = create_frames_for_video(video_id, lesson, final_audio)
