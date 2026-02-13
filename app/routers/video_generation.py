@@ -6,31 +6,45 @@ from dotenv import load_dotenv
 from fastapi import HTTPException, APIRouter
 from pydantic import BaseModel
 from PIL import Image, ImageDraw, ImageFont
-from openai import OpenAI
 from supabase import create_client, Client
 
-router = APIRouter(tags=["Video"])
+from groq import Groq
+from elevenlabs import ElevenLabs
+
+router = APIRouter(prefix="/video", tags=["Video"])
 
 # =========================
 # CONFIG
 # =========================
 load_dotenv()
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# --- GROQ ---
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+# --- ELEVENLABS ---
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL")  # Bella default
+
+# --- SUPABASE ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_KEY")
 
-if not OPENAI_API_KEY:
-    raise RuntimeError("OPENAI_API_KEY missing in .env")
+if not GROQ_API_KEY:
+    raise RuntimeError("GROQ_API_KEY missing in .env")
+
+if not ELEVENLABS_API_KEY:
+    raise RuntimeError("ELEVENLABS_API_KEY missing in .env")
 
 if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
     raise RuntimeError("SUPABASE_URL or SUPABASE_KEY missing in .env")
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+groq_client = Groq(api_key=GROQ_API_KEY)
+eleven_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 # =========================
-# PATHS (IMPORTANT)
+# PATHS
 # =========================
 APP_DIR = Path(__file__).resolve().parents[1]   # backend/app
 ASSETS_DIR = APP_DIR / "assets"
@@ -53,7 +67,7 @@ class VideoRequest(BaseModel):
     language: str = "hinglish"
 
 # =========================
-# 1) LESSON GENERATOR (14 scenes)
+# 1) LESSON GENERATOR (GROQ)
 # =========================
 def generate_lesson(topic: str, grade: int, language: str):
     prompt = f"""
@@ -92,39 +106,40 @@ Rules:
 - No markdown.
 """
 
-    resp = client.chat.completions.create(
-        model="gpt-4.1-mini",
+    resp = groq_client.chat.completions.create(
+        model="llama-3.1-70b-versatile",
         messages=[
-            {"role": "system", "content": "Return strict JSON only."},
+            {"role": "system", "content": "Return strict JSON only. No markdown."},
             {"role": "user", "content": prompt},
         ],
         temperature=0.55,
     )
 
     text = resp.choices[0].message.content
-
     if not text:
-        raise HTTPException(status_code=500, detail="OpenAI returned empty lesson JSON")
+        raise HTTPException(status_code=500, detail="Groq returned empty lesson JSON")
 
     text = text.strip()
 
     try:
         return json.loads(text)
     except Exception:
-        raise HTTPException(status_code=500, detail=f"Invalid JSON from OpenAI:\n{text[:400]}")
-
-
+        raise HTTPException(status_code=500, detail=f"Invalid JSON from Groq:\n{text[:500]}")
 
 # =========================
-# 2) TTS AUDIO
+# 2) ELEVENLABS TTS (SINGLE CALL)
 # =========================
 def generate_tts_audio(text: str, out_path: Path):
-    audio = client.audio.speech.create(
-        model="gpt-4o-mini-tts",
-        voice="alloy",
-        input=text
+    audio_stream = eleven_client.text_to_speech.convert(
+        voice_id=ELEVENLABS_VOICE_ID,
+        model_id="eleven_monolingual_v1",
+        text=text
     )
-    out_path.write_bytes(audio.read())
+
+    with open(out_path, "wb") as f:
+        for chunk in audio_stream:
+            if chunk:
+                f.write(chunk)
 
 # =========================
 # 3) AUDIO DURATION
@@ -139,51 +154,14 @@ def get_audio_duration_seconds(audio_path: Path) -> float:
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        return 6.0
+        return 60.0
     try:
         return float(result.stdout.strip())
     except:
-        return 6.0
+        return 60.0
 
 # =========================
-# 4) MERGE AUDIOS
-# =========================
-def merge_scene_audios(scene_audio_paths, out_audio: Path):
-    list_file = out_audio.parent / f"{out_audio.stem}_list.txt"
-
-    with open(list_file, "w", encoding="utf-8") as f:
-        for p in scene_audio_paths:
-            f.write(f"file '{p.as_posix()}'\n")
-
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", str(list_file),
-        "-c", "copy",
-        str(out_audio)
-    ]
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
-
-    if result.returncode != 0:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Audio merge failed:\n{result.stdout}\n{result.stderr}"
-        )
-
-# =========================
-# 5) LOAD ASSET
-# =========================
-def load_asset(name: str):
-    path = ASSETS_DIR / name
-    if not path.exists():
-        raise HTTPException(status_code=500, detail=f"Missing asset: {path}")
-    return Image.open(path).convert("RGBA")
-
-# =========================
-# 6) FRAME RENDER
+# 4) FRAME RENDER
 # =========================
 def render_scene_frame(scene, frame_path: Path, scene_index: int, t: float, scene_duration: float):
     W, H = 1280, 720
@@ -193,8 +171,6 @@ def render_scene_frame(scene, frame_path: Path, scene_index: int, t: float, scen
     # glow
     draw.ellipse((-200, -150, 500, 350), fill=(120, 80, 255, 60))
     draw.ellipse((900, 450, 1500, 1000), fill=(50, 255, 120, 50))
-
-
 
     # board
     board_x, board_y = 420, 90
@@ -260,40 +236,38 @@ def render_scene_frame(scene, frame_path: Path, scene_index: int, t: float, scen
     bg.convert("RGB").save(frame_path, "PNG")
 
 # =========================
-# 7) CREATE FRAMES
+# 5) CREATE FRAMES (SPLIT BY AUDIO LENGTH)
 # =========================
-def create_frames_for_video(video_id: str, lesson: dict, scene_audio_paths):
+def create_frames_for_video(video_id: str, lesson: dict, final_audio_path: Path):
     frames_folder = FRAMES_DIR / video_id
     frames_folder.mkdir(parents=True, exist_ok=True)
 
-    fps = 30
+    fps = 12  # speed boost
     frame_num = 1
 
+    total_dur = get_audio_duration_seconds(final_audio_path)
+    scenes_count = len(lesson["scenes"])
+    scene_dur = max(7.0, total_dur / scenes_count)
+
     for s_index, scene in enumerate(lesson["scenes"]):
-        dur = get_audio_duration_seconds(scene_audio_paths[s_index])
-
-        if dur < 7.0:
-            dur = 7.0
-
-        dur += 0.2
-        frames_per_scene = int(dur * fps)
+        frames_per_scene = int(scene_dur * fps)
 
         for f in range(frames_per_scene):
             t = f / fps
             frame_path = frames_folder / f"frame_{frame_num:05d}.png"
-            render_scene_frame(scene, frame_path, s_index, t, dur)
+            render_scene_frame(scene, frame_path, s_index, t, scene_dur)
             frame_num += 1
 
     return frames_folder
 
 # =========================
-# 8) FFMPEG MP4
+# 6) FFMPEG MP4
 # =========================
 def render_video_ffmpeg(frames_folder: Path, audio_path: Path, out_mp4: Path):
     cmd = [
         "ffmpeg",
         "-y",
-        "-r", "30",
+        "-r", "12",
         "-i", str(frames_folder / "frame_%05d.png"),
         "-i", str(audio_path),
         "-c:v", "libx264",
@@ -311,7 +285,7 @@ def render_video_ffmpeg(frames_folder: Path, audio_path: Path, out_mp4: Path):
         )
 
 # =========================
-# 9) UPLOAD TO SUPABASE STORAGE
+# 7) UPLOAD TO SUPABASE STORAGE
 # =========================
 def upload_file(bucket: str, file_path: Path, dest_path: str, content_type: str):
     data = file_path.read_bytes()
@@ -342,6 +316,7 @@ def render_video(req: VideoRequest):
     video_id = str(row.data[0]["id"])
 
     try:
+        # 1) lesson json from Groq
         lesson = generate_lesson(req.topic, req.grade, req.language)
 
         supabase.table("videos").update({
@@ -349,20 +324,24 @@ def render_video(req: VideoRequest):
             "lesson_json": lesson
         }).eq("id", video_id).execute()
 
-        scene_audio_paths = []
-        for i, s in enumerate(lesson["scenes"]):
-            scene_audio = AUDIO_DIR / f"{video_id}_scene{i+1}.mp3"
-            generate_tts_audio(s["narration"], scene_audio)
-            scene_audio_paths.append(scene_audio)
-
+        # 2) SINGLE narration -> SINGLE tts call (fast + cheap)
         final_audio = AUDIO_DIR / f"{video_id}.mp3"
-        merge_scene_audios(scene_audio_paths, final_audio)
 
-        frames_folder = create_frames_for_video(video_id, lesson, scene_audio_paths)
+        full_narration = "\n\n".join([
+            f"Scene {i+1}. {s.get('narration','')}"
+            for i, s in enumerate(lesson["scenes"])
+        ])
 
+        generate_tts_audio(full_narration, final_audio)
+
+        # 3) frames
+        frames_folder = create_frames_for_video(video_id, lesson, final_audio)
+
+        # 4) mp4
         out_mp4 = VIDEOS_DIR / f"{video_id}.mp4"
         render_video_ffmpeg(frames_folder, final_audio, out_mp4)
 
+        # 5) upload
         video_url = upload_file("videos", out_mp4, f"{video_id}.mp4", "video/mp4")
         audio_url = upload_file("videos", final_audio, f"{video_id}.mp3", "audio/mpeg")
 
