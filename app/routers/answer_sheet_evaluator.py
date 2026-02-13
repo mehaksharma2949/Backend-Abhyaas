@@ -27,7 +27,8 @@ if not OPENAI_API_KEY or OPENAI_API_KEY.upper().startswith("YOUR_"):
 if not SUPABASE_URL or not SUPABASE_KEY or str(SUPABASE_KEY).strip().upper().startswith("YOUR_"):
     raise RuntimeError("Missing or invalid SUPABASE_URL or SUPABASE_KEY in .env — set real Supabase credentials.")
 
-client = OpenAI(api_key=OPENAI_KEY)
+client = OpenAI(api_key=OPENAI_API_KEY)
+
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 BUCKET = "worksheet-files"
