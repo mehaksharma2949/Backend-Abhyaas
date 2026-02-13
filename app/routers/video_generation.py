@@ -101,8 +101,18 @@ Rules:
         temperature=0.55,
     )
 
-    text = resp.choices[0].message.content.strip()
+text = resp.choices[0].message.content
+
+if not text:
+    raise HTTPException(status_code=500, detail="OpenAI returned empty lesson JSON")
+
+text = text.strip()
+
+try:
     return json.loads(text)
+except Exception:
+    raise HTTPException(status_code=500, detail=f"Invalid JSON from OpenAI:\n{text[:400]}")
+
 
 # =========================
 # 2) TTS AUDIO
