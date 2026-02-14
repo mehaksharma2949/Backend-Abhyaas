@@ -2,17 +2,19 @@ import os
 import json
 import subprocess
 import traceback
-import asyncio
 from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import HTTPException, APIRouter
 from pydantic import BaseModel
 from PIL import Image, ImageDraw, ImageFont
-from supabase import create_client, Client
 
+from supabase import create_client, Client
 from groq import Groq
+
+# ✅ Edge TTS (FREE)
 import edge_tts
+import asyncio
 
 
 router = APIRouter(tags=["Video"])
@@ -35,7 +37,6 @@ if not GROQ_API_KEY:
 if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
     raise RuntimeError("SUPABASE_URL or SUPABASE_KEY missing in env")
 
-# init clients
 groq_client = Groq(api_key=GROQ_API_KEY)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
@@ -43,6 +44,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 # PATHS
 # =========================
 APP_DIR = Path(__file__).resolve().parents[1]  # backend/app
+ASSETS_DIR = APP_DIR / "assets"
 OUT_DIR = APP_DIR / "outputs"
 
 AUDIO_DIR = OUT_DIR / "audio"
@@ -53,13 +55,26 @@ for d in [AUDIO_DIR, FRAMES_DIR, VIDEOS_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 # =========================
+# LOAD TEACHER ASSETS
+# =========================
+def load_teacher_asset(filename: str):
+    p = ASSETS_DIR / filename
+    if not p.exists():
+        raise HTTPException(status_code=500, detail=f"Missing teacher asset: {p}")
+    return Image.open(p).convert("RGBA")
+
+TEACHER_IDLE = load_teacher_asset("teacher_idle.png.png")
+TEACHER_POINT = load_teacher_asset("teacher_point.png.png")
+TEACHER_HAPPY = load_teacher_asset("teacher_happy.png.png")
+TEACHER_THINK = load_teacher_asset("teacher_think.png.png")
+
+# =========================
 # REQUEST MODEL
 # =========================
 class VideoRequest(BaseModel):
     topic: str
     grade: int = 5
     language: str = "hinglish"
-
 
 # =========================
 # 1) LESSON GENERATOR (GROQ)
@@ -116,7 +131,6 @@ Rules:
 
     text = text.strip()
 
-    # Sometimes Groq returns JSON inside ```...``` so clean it
     if text.startswith("```"):
         text = text.replace("```json", "").replace("```", "").strip()
 
@@ -131,33 +145,20 @@ Rules:
     except Exception:
         raise HTTPException(status_code=500, detail=f"Invalid JSON from Groq:\n{text[:800]}")
 
-
 # =========================
 # 2) EDGE TTS (FREE)
 # =========================
-async def _edge_tts_async(text: str, out_path: Path, voice: str):
+async def edge_tts_generate(text: str, out_path: Path):
+    # Best voices:
+    # - en-IN-NeerjaNeural (female)
+    # - en-IN-PrabhatNeural (male)
+    voice = "en-IN-NeerjaNeural"
+
     communicate = edge_tts.Communicate(text=text, voice=voice)
     await communicate.save(str(out_path))
 
-
-def generate_tts_audio(text: str, out_path: Path, language: str):
-    """
-    Edge TTS voices:
-    - Hinglish/Indian accent: en-IN-NeerjaNeural (female), en-IN-PrabhatNeural (male)
-    - English US: en-US-JennyNeural
-    """
-
-    # default voice selection
-    if language.lower() in ["hinglish", "hindi", "en-in"]:
-        voice = "en-IN-NeerjaNeural"
-    else:
-        voice = "en-US-JennyNeural"
-
-    try:
-        asyncio.run(_edge_tts_async(text, out_path, voice))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Edge TTS failed: {str(e)}")
-
+def generate_tts_audio(text: str, out_path: Path):
+    asyncio.run(edge_tts_generate(text, out_path))
 
 # =========================
 # 3) AUDIO DURATION
@@ -181,81 +182,96 @@ def get_audio_duration_seconds(audio_path: Path) -> float:
     except:
         return 60.0
 
-
 # =========================
-# 4) FRAME RENDER
+# 4) FRAME RENDER (CARTOON TEACHER)
 # =========================
-def render_scene_frame(scene, frame_path: Path, t: float, scene_duration: float):
+def render_scene_frame(scene, frame_path: Path, t: float, scene_duration: float, scene_index: int):
     W, H = 1280, 720
-    bg = Image.new("RGBA", (W, H), (20, 20, 35, 255))
+    bg = Image.new("RGBA", (W, H), (18, 18, 28, 255))
     draw = ImageDraw.Draw(bg)
 
     # glow
-    draw.ellipse((-200, -150, 500, 350), fill=(120, 80, 255, 60))
-    draw.ellipse((900, 450, 1500, 1000), fill=(50, 255, 120, 50))
+    draw.ellipse((-250, -200, 550, 400), fill=(120, 80, 255, 55))
+    draw.ellipse((850, 450, 1600, 1000), fill=(50, 255, 140, 45))
+
+    # teacher pose based on scene index
+    if scene_index % 4 == 0:
+        teacher = TEACHER_IDLE
+    elif scene_index % 4 == 1:
+        teacher = TEACHER_POINT
+    elif scene_index % 4 == 2:
+        teacher = TEACHER_THINK
+    else:
+        teacher = TEACHER_HAPPY
+
+    # resize teacher
+    teacher = teacher.resize((360, 520))
+
+    # paste teacher left
+    bg.alpha_composite(teacher, (40, 160))
 
     # board
-    board_x, board_y = 420, 90
-    board_w, board_h = 820, 520
+    board_x, board_y = 430, 70
+    board_w, board_h = 820, 580
 
     draw.rounded_rectangle(
         (board_x, board_y, board_x + board_w, board_y + board_h),
-        radius=28,
-        fill=(10, 10, 18, 200),
-        outline=(255, 255, 255, 60),
+        radius=30,
+        fill=(10, 10, 18, 210),
+        outline=(255, 255, 255, 70),
         width=2
     )
 
     # fonts
     try:
-        font_big = ImageFont.truetype("arial.ttf", 46)
-        font_small = ImageFont.truetype("arial.ttf", 28)
-        font_tiny = ImageFont.truetype("arial.ttf", 24)
+        font_big = ImageFont.truetype("arial.ttf", 44)
+        font_small = ImageFont.truetype("arial.ttf", 30)
+        font_tiny = ImageFont.truetype("arial.ttf", 26)
     except:
         font_big = ImageFont.load_default()
         font_small = ImageFont.load_default()
         font_tiny = ImageFont.load_default()
 
     subtitle = scene.get("subtitle", "")
-    draw.text((board_x + 30, board_y + 20), subtitle, font=font_big, fill=(255, 255, 255, 240))
+    draw.text((board_x + 30, board_y + 25), subtitle, font=font_big, fill=(255, 255, 255, 240))
 
     ex = scene.get("example", {})
     q = ex.get("question", "")
     steps = ex.get("steps", [])
 
-    reveal_speed = 1.2
+    # step reveal
+    reveal_speed = 1.1
     lines_to_show = int(t / reveal_speed)
     lines_to_show = max(0, min(lines_to_show, len(steps)))
 
-    y = board_y + 100
+    y = board_y + 110
 
-    if t > 0.5:
-        draw.text((board_x + 30, y), f"Q: {q}", font=font_small, fill=(255, 255, 255, 220))
+    if t > 0.4:
+        draw.text((board_x + 30, y), f"Q: {q}", font=font_small, fill=(255, 255, 255, 230))
     y += 60
 
     for i in range(lines_to_show):
         st = steps[i]
-        draw.text((board_x + 40, y), f"{i+1}. {st}", font=font_tiny, fill=(200, 230, 255, 230))
-        y += 40
+        draw.text((board_x + 40, y), f"{i+1}. {st}", font=font_tiny, fill=(190, 230, 255, 240))
+        y += 44
 
-    # speech bubble
+    # narration bubble (top-left)
     bubble = scene.get("narration", "")
-    bx, by = 50, 70
-    bw, bh = 330, 160
+    bx, by = 40, 40
+    bw, bh = 360, 110
 
     draw.rounded_rectangle(
         (bx, by, bx + bw, by + bh),
-        radius=22,
+        radius=20,
         fill=(0, 0, 0, 150),
         outline=(255, 255, 255, 40),
         width=2
     )
 
     chars_to_show = int((t / scene_duration) * len(bubble))
-    draw.text((bx + 18, by + 18), bubble[:chars_to_show], font=font_tiny, fill=(255, 255, 255, 240))
+    draw.text((bx + 16, by + 16), bubble[:chars_to_show], font=font_tiny, fill=(255, 255, 255, 240))
 
     bg.convert("RGB").save(frame_path, "PNG")
-
 
 # =========================
 # 5) CREATE FRAMES
@@ -264,24 +280,23 @@ def create_frames_for_video(video_id: str, lesson: dict, final_audio_path: Path)
     frames_folder = FRAMES_DIR / video_id
     frames_folder.mkdir(parents=True, exist_ok=True)
 
-    fps = 10
+    fps = 12
     frame_num = 1
 
     total_dur = get_audio_duration_seconds(final_audio_path)
     scenes_count = len(lesson["scenes"])
     scene_dur = max(6.0, total_dur / scenes_count)
 
-    for scene in lesson["scenes"]:
+    for scene_index, scene in enumerate(lesson["scenes"]):
         frames_per_scene = int(scene_dur * fps)
 
         for f in range(frames_per_scene):
             t = f / fps
             frame_path = frames_folder / f"frame_{frame_num:05d}.png"
-            render_scene_frame(scene, frame_path, t, scene_dur)
+            render_scene_frame(scene, frame_path, t, scene_dur, scene_index)
             frame_num += 1
 
     return frames_folder, fps
-
 
 # =========================
 # 6) FFMPEG MP4
@@ -307,7 +322,6 @@ def render_video_ffmpeg(frames_folder: Path, fps: int, audio_path: Path, out_mp4
             detail=f"FFmpeg failed:\n{result.stdout}\n{result.stderr}"
         )
 
-
 # =========================
 # 7) UPLOAD TO SUPABASE STORAGE
 # =========================
@@ -321,7 +335,6 @@ def upload_file(bucket: str, file_path: Path, dest_path: str, content_type: str)
     )
 
     return supabase.storage.from_(bucket).get_public_url(dest_path)
-
 
 # =========================
 # API: CREATE VIDEO
@@ -349,7 +362,7 @@ def render_video(req: VideoRequest):
             "lesson_json": lesson
         }).eq("id", video_id).execute()
 
-        # 2) narration -> Edge TTS
+        # 2) single narration -> single TTS call
         final_audio = AUDIO_DIR / f"{video_id}.mp3"
 
         full_narration = "\n\n".join([
@@ -357,7 +370,7 @@ def render_video(req: VideoRequest):
             for i, s in enumerate(lesson["scenes"])
         ])
 
-        generate_tts_audio(full_narration, final_audio, req.language)
+        generate_tts_audio(full_narration, final_audio)
 
         # 3) frames
         frames_folder, fps = create_frames_for_video(video_id, lesson, final_audio)
@@ -392,12 +405,3 @@ def render_video(req: VideoRequest):
         }).eq("id", video_id).execute()
 
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# =========================
-# API: LIST VIDEOS
-# =========================
-@router.get("/videos")
-def list_videos():
-    res = supabase.table("videos").select("*").order("created_at", desc=True).limit(20).execute()
-    return res.data
