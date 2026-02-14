@@ -3,6 +3,7 @@ import json
 import subprocess
 import traceback
 from pathlib import Path
+import textwrap
 
 from dotenv import load_dotenv
 from fastapi import HTTPException, APIRouter
@@ -44,7 +45,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 # PATHS
 # =========================
 APP_DIR = Path(__file__).resolve().parents[1]  # backend/app
-ASSETS_DIR = APP_DIR / "Assets"
+ASSETS_DIR = APP_DIR / "Assets"  # ✅ MUST be lowercase assets
 OUT_DIR = APP_DIR / "outputs"
 
 AUDIO_DIR = OUT_DIR / "audio"
@@ -55,6 +56,35 @@ for d in [AUDIO_DIR, FRAMES_DIR, VIDEOS_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
 # =========================
+# TEXT WRAP HELPER
+# =========================
+def draw_wrapped_text(draw, text, x, y, font, fill, max_width, max_lines=6, line_spacing=8):
+    words = text.split()
+    lines = []
+    current = ""
+
+    for w in words:
+        test = (current + " " + w).strip()
+        wsize = draw.textbbox((0, 0), test, font=font)[2]
+        if wsize <= max_width:
+            current = test
+        else:
+            if current:
+                lines.append(current)
+            current = w
+
+    if current:
+        lines.append(current)
+
+    lines = lines[:max_lines]  # stop overflow
+
+    for line in lines:
+        draw.text((x, y), line, font=font, fill=fill)
+        y += font.size + line_spacing
+
+    return y
+
+# =========================
 # LOAD TEACHER ASSETS
 # =========================
 def load_teacher_asset(filename: str):
@@ -63,10 +93,11 @@ def load_teacher_asset(filename: str):
         raise HTTPException(status_code=500, detail=f"Missing teacher asset: {p}")
     return Image.open(p).convert("RGBA")
 
-TEACHER_IDLE = load_teacher_asset("teacher_idle.png.png")
-TEACHER_POINT = load_teacher_asset("teacher_point.png.png")
-TEACHER_HAPPY = load_teacher_asset("teacher_happy.png.png")
-TEACHER_THINK = load_teacher_asset("teacher_think.png.png")
+# ✅ correct file names
+TEACHER_IDLE = load_teacher_asset("teacher_idle.png"
+TEACHER_POINT = load_teacher_asset("teacher_point.png")
+TEACHER_HAPPY = load_teacher_asset("teacher_happy.png")
+TEACHER_THINK = load_teacher_asset("teacher_think.png")
 
 # =========================
 # REQUEST MODEL
@@ -131,6 +162,7 @@ Rules:
 
     text = text.strip()
 
+    # Sometimes Groq returns ```json
     if text.startswith("```"):
         text = text.replace("```json", "").replace("```", "").strip()
 
@@ -149,16 +181,23 @@ Rules:
 # 2) EDGE TTS (FREE)
 # =========================
 async def edge_tts_generate(text: str, out_path: Path):
-    # Best voices:
-    # - en-IN-NeerjaNeural (female)
-    # - en-IN-PrabhatNeural (male)
     voice = "en-IN-NeerjaNeural"
 
     communicate = edge_tts.Communicate(text=text, voice=voice)
     await communicate.save(str(out_path))
 
 def generate_tts_audio(text: str, out_path: Path):
-    asyncio.run(edge_tts_generate(text, out_path))
+    """
+    Fix for Render:
+    asyncio.run sometimes fails if loop exists.
+    """
+    try:
+        asyncio.run(edge_tts_generate(text, out_path))
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(edge_tts_generate(text, out_path))
+        loop.close()
 
 # =========================
 # 3) AUDIO DURATION
@@ -175,15 +214,15 @@ def get_audio_duration_seconds(audio_path: Path) -> float:
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode != 0:
-        return 60.0
+        return 45.0
 
     try:
         return float(result.stdout.strip())
     except:
-        return 60.0
+        return 45.0
 
 # =========================
-# 4) FRAME RENDER (CARTOON TEACHER)
+# 4) FRAME RENDER
 # =========================
 def render_scene_frame(scene, frame_path: Path, t: float, scene_duration: float, scene_index: int):
     W, H = 1280, 720
@@ -194,7 +233,7 @@ def render_scene_frame(scene, frame_path: Path, t: float, scene_duration: float,
     draw.ellipse((-250, -200, 550, 400), fill=(120, 80, 255, 55))
     draw.ellipse((850, 450, 1600, 1000), fill=(50, 255, 140, 45))
 
-    # teacher pose based on scene index
+    # teacher pose
     if scene_index % 4 == 0:
         teacher = TEACHER_IDLE
     elif scene_index % 4 == 1:
@@ -204,88 +243,127 @@ def render_scene_frame(scene, frame_path: Path, t: float, scene_duration: float,
     else:
         teacher = TEACHER_HAPPY
 
-    # resize teacher
-    teacher = teacher.resize((360, 520))
-
-    # paste teacher left
-    bg.alpha_composite(teacher, (40, 160))
+    teacher = teacher.resize((380, 560))
+    bg.alpha_composite(teacher, (30, 140))
 
     # board
-    board_x, board_y = 430, 70
-    board_w, board_h = 820, 580
+    board_x, board_y = 430, 60
+    board_w, board_h = 820, 610
 
     draw.rounded_rectangle(
         (board_x, board_y, board_x + board_w, board_y + board_h),
-        radius=30,
-        fill=(10, 10, 18, 210),
+        radius=34,
+        fill=(10, 10, 18, 215),
         outline=(255, 255, 255, 70),
         width=2
     )
 
-    # fonts
+    # fonts (bigger)
     try:
-        font_big = ImageFont.truetype("arial.ttf", 44)
-        font_small = ImageFont.truetype("arial.ttf", 30)
-        font_tiny = ImageFont.truetype("arial.ttf", 26)
+        font_big = ImageFont.truetype("arial.ttf", 58)
+        font_small = ImageFont.truetype("arial.ttf", 40)
+        font_tiny = ImageFont.truetype("arial.ttf", 34)
     except:
         font_big = ImageFont.load_default()
         font_small = ImageFont.load_default()
         font_tiny = ImageFont.load_default()
 
     subtitle = scene.get("subtitle", "")
-    draw.text((board_x + 30, board_y + 25), subtitle, font=font_big, fill=(255, 255, 255, 240))
+
+    # subtitle wrap
+    draw_wrapped_text(
+        draw,
+        subtitle,
+        board_x + 30,
+        board_y + 25,
+        font_big,
+        (255, 255, 255, 240),
+        max_width=board_w - 60,
+        max_lines=2
+    )
 
     ex = scene.get("example", {})
     q = ex.get("question", "")
     steps = ex.get("steps", [])
 
     # step reveal
-    reveal_speed = 1.1
+    reveal_speed = 1.0
     lines_to_show = int(t / reveal_speed)
     lines_to_show = max(0, min(lines_to_show, len(steps)))
 
-    y = board_y + 110
+    y = board_y + 150
 
-    if t > 0.4:
-        draw.text((board_x + 30, y), f"Q: {q}", font=font_small, fill=(255, 255, 255, 230))
-    y += 60
+    if t > 0.4 and q:
+        y = draw_wrapped_text(
+            draw,
+            f"Q: {q}",
+            board_x + 30,
+            y,
+            font_small,
+            (255, 255, 255, 230),
+            max_width=board_w - 60,
+            max_lines=2
+        )
+        y += 10
 
     for i in range(lines_to_show):
         st = steps[i]
-        draw.text((board_x + 40, y), f"{i+1}. {st}", font=font_tiny, fill=(190, 230, 255, 240))
-        y += 44
+        y = draw_wrapped_text(
+            draw,
+            f"{i+1}. {st}",
+            board_x + 40,
+            y,
+            font_tiny,
+            (190, 230, 255, 240),
+            max_width=board_w - 70,
+            max_lines=1
+        )
+        y += 6
 
-    # narration bubble (top-left)
+    # narration bubble
     bubble = scene.get("narration", "")
     bx, by = 40, 40
-    bw, bh = 360, 110
+    bw, bh = 370, 140
 
     draw.rounded_rectangle(
         (bx, by, bx + bw, by + bh),
-        radius=20,
-        fill=(0, 0, 0, 150),
-        outline=(255, 255, 255, 40),
+        radius=22,
+        fill=(0, 0, 0, 160),
+        outline=(255, 255, 255, 45),
         width=2
     )
 
     chars_to_show = int((t / scene_duration) * len(bubble))
-    draw.text((bx + 16, by + 16), bubble[:chars_to_show], font=font_tiny, fill=(255, 255, 255, 240))
+    bubble_text = bubble[:chars_to_show]
+
+    draw_wrapped_text(
+        draw,
+        bubble_text,
+        bx + 16,
+        by + 16,
+        font_tiny,
+        (255, 255, 255, 240),
+        max_width=bw - 30,
+        max_lines=3
+    )
 
     bg.convert("RGB").save(frame_path, "PNG")
 
 # =========================
-# 5) CREATE FRAMES
+# 5) CREATE FRAMES (FAST)
 # =========================
 def create_frames_for_video(video_id: str, lesson: dict, final_audio_path: Path):
     frames_folder = FRAMES_DIR / video_id
     frames_folder.mkdir(parents=True, exist_ok=True)
 
-    fps = 12
+    fps = 6  # ✅ FAST
     frame_num = 1
 
     total_dur = get_audio_duration_seconds(final_audio_path)
     scenes_count = len(lesson["scenes"])
-    scene_dur = max(6.0, total_dur / scenes_count)
+
+    # keep scene short
+    scene_dur = max(4.0, total_dur / scenes_count)
 
     for scene_index, scene in enumerate(lesson["scenes"]):
         frames_per_scene = int(scene_dur * fps)
@@ -362,7 +440,7 @@ def render_video(req: VideoRequest):
             "lesson_json": lesson
         }).eq("id", video_id).execute()
 
-        # 2) single narration -> single TTS call
+        # 2) TTS (single call)
         final_audio = AUDIO_DIR / f"{video_id}.mp3"
 
         full_narration = "\n\n".join([
