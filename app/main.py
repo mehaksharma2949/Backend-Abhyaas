@@ -5,7 +5,7 @@ from app.routers import (
     auth, otp, dashboard,
     worksheet, diagram, fluency,
     story, teachback, lesson_plan,
-    video_generation, answer_sheet_evaluator,doubt_solver
+    video_generation, answer_sheet_evaluator,doubt_solver,chatbot
 )
 
 app = FastAPI(title="Abhyaas Backend Full")
@@ -42,4 +42,5 @@ app.include_router(lesson_plan.router, prefix="/lesson-plan")
 app.include_router(video_generation.router, prefix="/video")
 app.include_router(answer_sheet_evaluator.router, prefix="/answer-sheet")
 app.include_router(doubt_solver.router, prefix="/doubt")
+app.include_router(doubt_solver.router, prefix="/chatbot")
 
