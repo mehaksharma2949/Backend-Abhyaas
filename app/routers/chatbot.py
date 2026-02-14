@@ -7,7 +7,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-router = APIRouter(prefix="/chatbot", tags=["Chatbot"])
+router = APIRouter(tags=["Chatbot"])
+
 
 # ENV
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
