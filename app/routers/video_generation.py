@@ -44,7 +44,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 # PATHS
 # =========================
 APP_DIR = Path(__file__).resolve().parents[1]  # backend/app
-ASSETS_DIR = APP_DIR / "assets"
+ASSETS_DIR = APP_DIR / "Assets"
 OUT_DIR = APP_DIR / "outputs"
 
 AUDIO_DIR = OUT_DIR / "audio"
