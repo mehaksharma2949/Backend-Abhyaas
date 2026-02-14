@@ -42,5 +42,6 @@ app.include_router(lesson_plan.router, prefix="/lesson-plan")
 app.include_router(video_generation.router, prefix="/video")
 app.include_router(answer_sheet_evaluator.router, prefix="/answer-sheet")
 app.include_router(doubt_solver.router, prefix="/doubt")
-app.include_router(doubt_solver.router, prefix="/chatbot")
+app.include_router(chatbot.router, prefix="/chatbot")
+
 
