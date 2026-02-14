@@ -94,7 +94,7 @@ def load_teacher_asset(filename: str):
     return Image.open(p).convert("RGBA")
 
 # ✅ correct file names
-TEACHER_IDLE = load_teacher_asset("teacher_idle.png"
+TEACHER_IDLE = load_teacher_asset("teacher_idle.png")
 TEACHER_POINT = load_teacher_asset("teacher_point.png")
 TEACHER_HAPPY = load_teacher_asset("teacher_happy.png")
 TEACHER_THINK = load_teacher_asset("teacher_think.png")
